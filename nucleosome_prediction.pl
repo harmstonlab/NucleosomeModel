@@ -25,6 +25,13 @@ my $output_prefix = get_arg("p", "$$", \%args);
 my $published_version = get_arg("published", 0, \%args);
 my $raw_binding = get_arg("raw_binding", 0, \%args);
 
+# Temporary files go in the current directory, or in NUCPRED_WORK_DIR if it's set
+# (the standalone executable sets it).
+my $work_dir = (length($ENV{"NUCPRED_WORK_DIR"}) > 0) ? $ENV{"NUCPRED_WORK_DIR"} : ".";
+my $cd_work_dir = ($work_dir eq ".") ? "" : "cd $work_dir && ";
+my $tmp_sequence_file = "$work_dir/tmp_" . basename($sequence_file) . "_$$";
+my $tmp_output_file = "$work_dir/tmp_output_$$";
+
 my @legend = ("Coverage (p>0.2)", "P. Start", "Avg. Occupancy", "Raw Binding (log ratio)");
 my @track_colors = ("43,69,255,1", "0,0,0,1", "51,153,255,1", "51,153,255,1");
 my @track_styles = ("Filled oval", "Filled box", "Filled box", "Filled box");
@@ -44,7 +51,7 @@ my $specific_params = "";
 my $additional_flags = "";
 my $post_process = "";
 
-my $basic_cmd = "EXE_BASE_DIR/lib/gxw2stats.pl -m $model_file -n Nucleosome -s tmp_${sequence_file}_$$ -bck EXE_BASE_DIR/models/uniform.gxw -temp $temperature -rsf $nucleo_concentration -norc ";
+my $basic_cmd = "EXE_BASE_DIR/lib/gxw2stats.pl -m $model_file -n Nucleosome -s $tmp_sequence_file -bck EXE_BASE_DIR/models/uniform.gxw -temp $temperature -rsf $nucleo_concentration -norc ";
 
 if ($raw_binding == 1)
 {
@@ -66,13 +73,26 @@ if (length($illegal_chars) > 0)
 
 print STDERR "Calculating predictions...\n";
 
-system ("EXE_BASE_DIR/lib/fasta2stab.pl $sequence_file | EXE_BASE_DIR/lib/stab2fasta.pl | EXE_BASE_DIR/lib/to_upper_case.pl > tmp_${sequence_file}_$$");
+system ("EXE_BASE_DIR/lib/fasta2stab.pl $sequence_file | EXE_BASE_DIR/lib/stab2fasta.pl | EXE_BASE_DIR/lib/to_upper_case.pl > $tmp_sequence_file");
 
 my $pid = $$;
 
-my $pred_cmd = "$basic_cmd $specific_params $additional_flags | $post_process > tmp_output_$pid";
+my $pred_cmd = "$cd_work_dir$basic_cmd $specific_params $additional_flags | $post_process > $tmp_output_file";
 
 system ("$pred_cmd");
+my $pred_status = $?;
+
+if (!(-s $tmp_output_file))
+{
+   # No error message if it was killed (e.g. with Ctrl-C)
+   if (($pred_status & 127) == 0)
+   {
+      print STDERR "Error: No output from map_learn_static. Either $sequence_file has no sequences in it, or map_learn_static failed to run.\n";
+      print STDERR "Run again with SEGAL_LAB_DEBUG=1 to see its error messages.\n";
+   }
+   system "rm -f $work_dir/map.log $tmp_sequence_file $tmp_output_file";
+   exit 1;
+}
 
 my @r;
 
@@ -104,12 +124,12 @@ if ($gxp == 1)
 {
    if ($raw_binding == 1)
    {
-      open (DATA_OUT_FILE, ">tmp_${pid}_3.tab");
+      open (DATA_OUT_FILE, ">$work_dir/tmp_${pid}_3.tab");
    }
    else
    {
-      open (DATA_OUT_FILE, ">tmp_${pid}_1.tab");
-      open (AVG_OUT_FILE, ">tmp_${pid}_2.tab");
+      open (DATA_OUT_FILE, ">$work_dir/tmp_${pid}_1.tab");
+      open (AVG_OUT_FILE, ">$work_dir/tmp_${pid}_2.tab");
    }
 }
 my $k = 0;
@@ -121,7 +141,7 @@ my $curr_starts_sum = 0;
 
 my $avg;
 
-open (RAW_OUTPUT, "<tmp_output_$pid");
+open (RAW_OUTPUT, "<$tmp_output_file");
 while (<RAW_OUTPUT>)
 {
    chop;
@@ -207,7 +227,7 @@ if ($gxp == 1)
    print STDERR "Creating gxp file...\n";
 
    my @LINES;
-   open(FASTA_FILE, "tmp_${sequence_file}_$$") or die("Error: Could not open file $sequence_file.\n");
+   open(FASTA_FILE, "<$tmp_sequence_file") or die("Error: Could not open file $sequence_file.\n");
    my $fasta_file_ref = \*FASTA_FILE;
    
    while (<$fasta_file_ref>) {
@@ -249,14 +269,14 @@ if ($gxp == 1)
    if ($raw_binding == 1)
    {
       my $track_name = &removeIllegalXMLChars("$title: $legend[3]");
-      my $temp_cmd = "EXE_BASE_DIR/lib/tab2feature_gxt.pl tmp_${pid}_3.tab -n '${track_name}' -c '$track_colors[3]'  -lh 50 -minc '\"$raw_binding_min\"' -maxc '$raw_binding_max' -zeroc '0' -l '$track_styles[3]'  >> ${output_prefix}.gxp";
+      my $temp_cmd = "EXE_BASE_DIR/lib/tab2feature_gxt.pl $work_dir/tmp_${pid}_3.tab -n '${track_name}' -c '$track_colors[3]'  -lh 50 -minc '\"$raw_binding_min\"' -maxc '$raw_binding_max' -zeroc '0' -l '$track_styles[3]'  >> ${output_prefix}.gxp";
       system $temp_cmd;
-      system "rm tmp_${pid}_3.tab";
+      system "rm $work_dir/tmp_${pid}_3.tab";
    }
    else
    {
       open (START_FILE, ">${output_prefix}_start.txt");
-      open (RAW_OUTPUT, "<tmp_output_$pid");
+      open (RAW_OUTPUT, "<$tmp_output_file");
       while (<RAW_OUTPUT>) 
       {
 	 chop;
@@ -281,9 +301,9 @@ if ($gxp == 1)
 	 } 
 	 else 
 	 {
-	    system "EXE_BASE_DIR/lib/tab2feature_gxt.pl tmp_${pid}_${j}.tab -n '${track_name}' -c '$track_colors[$j]'  -lh 50 -minc '0' -maxc '1' -l '$track_styles[$j]'  >> ${output_prefix}.gxp";
+	    system "EXE_BASE_DIR/lib/tab2feature_gxt.pl $work_dir/tmp_${pid}_${j}.tab -n '${track_name}' -c '$track_colors[$j]'  -lh 50 -minc '0' -maxc '1' -l '$track_styles[$j]'  >> ${output_prefix}.gxp";
 	    
-	    system "rm tmp_${pid}_${j}.tab";
+	    system "rm $work_dir/tmp_${pid}_${j}.tab";
 	 }
       }
    }
@@ -318,7 +338,7 @@ if ($gxp == 1)
    print STDERR "Done.\n";
 }
 
-system "rm map.log tmp_${sequence_file}_$$ tmp_output_$pid";
+system "rm -f $work_dir/map.log $tmp_sequence_file $tmp_output_file";
 
 sub removeIllegalXMLChars
 {

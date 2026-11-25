@@ -32,3 +32,12 @@ install:
 	chmod -R 755 lib bin nucleosome_prediction.pl; \
 	chmod 777  models templates; \
 	chmod 644 models/* templates/* ; \
+
+
+# make standalone builds dist/nucleosome_prediction-<version>-<os>-<cpu> (see README.md)
+LIBSTDCXX5 ?= lib/libstdc++.so.5
+
+standalone:
+	LIBSTDCXX5="$(LIBSTDCXX5)" bash standalone/build.sh
+
+.PHONY: standalone
